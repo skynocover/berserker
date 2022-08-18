@@ -67,12 +67,14 @@ function App() {
 
   const init = async () => {
     // @ts-ignore
-    if (window.ethereum) {
+    if (window.ethereum && !provider) {
       setSpin(true);
+      // const p = new ethers.providers.JsonRpcProvider('http://127.0.0.1:8545');
       // @ts-ignore
-      const p = new ethers.providers.JsonRpcProvider('http://127.0.0.1:8545');
-      // const p = new ethers.providers.Web3Provider(window.ethereum);
-      // await p.send('eth_requestAccounts', []);
+      const p = new ethers.providers.Web3Provider(window.ethereum);
+      // @ts-ignore
+      await window.ethereum.enable();
+      await p.send('eth_requestAccounts', []);
       setProvider(p);
 
       const { name } = await p.getNetwork();
