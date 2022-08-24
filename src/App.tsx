@@ -43,6 +43,8 @@ function App() {
   const [chainName, setChainName] = React.useState<string>('');
   const [contract, setContract] = React.useState<ethers.Contract>();
   const [profile, setProfile] = React.useState<contractProfile>();
+  const [contractBalance, setContractBalance] = React.useState<string>();
+  const [balance, setBalance] = React.useState<string>('');
 
   React.useEffect(() => {
     if (spin) {
@@ -67,22 +69,29 @@ function App() {
 
   const init = async () => {
     // @ts-ignore
-    if (window.ethereum && !provider) {
+    const ethereum = window.ethereum;
+    if (ethereum && !provider) {
       setSpin(true);
-      // const p = new ethers.providers.JsonRpcProvider('http://127.0.0.1:8545');
       // @ts-ignore
-      const p = new ethers.providers.Web3Provider(window.ethereum);
+      const p = new ethers.providers.Web3Provider(ethereum);
       // @ts-ignore
-      await window.ethereum.enable();
+      await ethereum.enable();
       await p.send('eth_requestAccounts', []);
       setProvider(p);
+
+      // @ts-ignore
+      ethereum.on('accountsChanged', async (accounts: Array<string>) => {
+        setAddress(accounts[0]);
+        setBalance(ethers.utils.formatEther(await signer.getBalance()));
+      });
 
       const { name } = await p.getNetwork();
       setChainName(name);
 
       const signer = p.getSigner();
-      const address = await signer.getAddress();
-      setAddress(address);
+      setAddress(await signer.getAddress());
+
+      setBalance(ethers.utils.formatEther(await signer.getBalance()));
 
       const c = new ethers.Contract(
         import.meta.env.VITE_CONTRACT_ADDRESS,
@@ -91,6 +100,9 @@ function App() {
       );
       console.log(c);
       setContract(c);
+
+      const balance = await p.getBalance(c.address);
+      setContractBalance(ethers.utils.formatEther(balance));
 
       await getSetting(c);
       setSpin(false);
@@ -108,19 +120,39 @@ function App() {
 
       setProfile({ nftName, symbol, totalSupply, maxSupply, nftPrice, maxPerAddressMint });
       setNewPrice(nftPrice);
-      setNewMaxSupply(maxSupply);
 
-      const baseURI = await contract.baseURI();
-      setNewBaseURI(baseURI);
+      setNewBaseURI(await contract.baseURI());
+      setPause(await contract.paused());
+      setNewBlindTokenURI(await contract.blindTokenURI());
+      setNewMaxMint((await contract.maxPerAddressMint()).toString());
+      setWhitelistPause(await contract.allowlistPaused());
+      setNewWhitelistPrice(ethers.utils.formatEther(await contract.allowlistNftPrice()));
 
-      const p = await contract.paused();
-      setPause(p);
+      const DEFAULT_ADMIN_ROLE =
+        '0x0000000000000000000000000000000000000000000000000000000000000000';
+      const minterCount = (await contract.getRoleMemberCount(DEFAULT_ADMIN_ROLE)).toNumber();
+      const members = [];
+      for (let i = 0; i < minterCount; ++i) {
+        members.push(await contract.getRoleMember(DEFAULT_ADMIN_ROLE, i));
+      }
+      setMembers([...members, '']);
 
-      const u = await contract.blindTokenURI();
-      setNewBlindTokenURI(u);
+      if (provider) {
+        const balance = await provider.getBalance(contract.address);
+        const temp = ethers.utils.formatEther(balance);
+        setContractBalance(temp);
+      }
 
-      const a = await contract.maxPerAddressMint();
-      setNewMaxMint(a.toString());
+      const sharingMember: sharingMember[] = [];
+      const sharingCount = (await contract.getSharingMemberCount()).toNumber();
+      for (let i = 0; i < sharingCount; i++) {
+        const sharing = await contract.getSharingMember(i);
+        sharingMember.push({
+          address: sharing[0],
+          share: sharing[1].toNumber(),
+        });
+      }
+      setSharingMembers(sharingMember);
     }
   };
 
@@ -174,31 +206,34 @@ function App() {
   const [newPrice, setNewPrice] = React.useState<string>('');
 
   const setPrice = async () => {
-    console.log(newPrice);
     const wai = ethers.utils.parseUnits(newPrice, 'ether');
-    console.log(wai.toString());
     if (contract) {
-      setSpin(true);
-      const tx = await contract.setNftPrice(wai.toString());
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract!);
+      try {
+        setSpin(true);
+        const tx = await contract.setNftPrice(wai.toString());
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
+      }
       setSpin(false);
     }
   };
 
-  const [newMaxSupply, setNewMaxSupply] = React.useState<string>('');
-  const setMaxSupply = async () => {
-    if (contract && profile) {
-      if (newMaxSupply <= profile.maxSupply) {
-        console.log('not allow');
-        return;
+  const [newWhitelistPrice, setNewWhitelistPrice] = React.useState<string>('');
+  const setWhitelistPrice = async () => {
+    const wai = ethers.utils.parseUnits(newWhitelistPrice, 'ether');
+    if (contract) {
+      try {
+        setSpin(true);
+        const tx = await contract.setAllowlistNftPrice(wai.toString());
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
       }
-      setSpin(true);
-      const tx = await contract.setMaxSupply(newMaxSupply);
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract!);
       setSpin(false);
     }
   };
@@ -206,11 +241,15 @@ function App() {
   const [newBaseURI, setNewBaseURI] = React.useState<string>('');
   const setBaseURI = async () => {
     if (contract) {
-      setSpin(true);
-      const tx = await contract!.setBaseURI(newBaseURI);
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract!);
+      try {
+        setSpin(true);
+        const tx = await contract!.setBaseURI(newBaseURI);
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
+      }
       setSpin(false);
     }
   };
@@ -219,35 +258,45 @@ function App() {
   const setMaxMint = async () => {
     setSpin(true);
     if (contract) {
-      const tx = await contract.setMaxPerAddressMint(newMaxMint);
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract);
+      try {
+        const tx = await contract.setMaxPerAddressMint(newMaxMint);
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract);
+      } catch (error) {
+        setTxError(error);
+      }
     }
     setSpin(false);
   };
 
   const [newBlindTokenURI, setNewBlindTokenURI] = React.useState<string>('');
   const setBlindTokenURI = async () => {
-    console.log(newBlindTokenURI);
     setSpin(true);
     if (contract) {
-      const tx = await contract.setBlindTokenURI(newBlindTokenURI);
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract);
+      try {
+        const tx = await contract.setBlindTokenURI(newBlindTokenURI);
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract);
+      } catch (error) {
+        setTxError(error);
+      }
     }
     setSpin(false);
   };
 
   const setBlindBox = async (e: any) => {
-    console.log(e.target.checked);
     if (contract) {
-      setSpin(true);
-      const tx = await contract.setBlindBoxOpened(e.target.checked);
-      const res = await tx.wait();
-      console.log(res);
-      await getSetting(contract);
+      try {
+        setSpin(true);
+        const tx = await contract.setBlindBoxOpened(e.target.checked);
+        const res = await tx.wait();
+        console.log(res);
+        await getSetting(contract);
+      } catch (error) {
+        setTxError(error);
+      }
       setSpin(false);
     }
   };
@@ -256,17 +305,19 @@ function App() {
 
   const pauseMint = async (e: any) => {
     if (contract) {
-      setSpin(true);
-      if (e.target.checked) {
-        const tx = await contract.pause();
-        const res = tx.wait();
-        console.log(res);
-      } else {
-        const tx = await contract.unpause();
-        const res = await tx.wait();
-        console.log(res);
+      try {
+        setSpin(true);
+        if (e.target.checked) {
+          const tx = await contract.pause();
+          const res = tx.wait();
+        } else {
+          const tx = await contract.unpause();
+          const res = await tx.wait();
+        }
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
       }
-      await getSetting(contract!);
       setSpin(false);
     }
   };
@@ -276,47 +327,99 @@ function App() {
   }
   const deleteList = (index: number) => {
     const temp = [...whiteList];
-    console.log({ index });
     const temp2 = temp.filter((item, i) => i !== index);
-    console.log(temp2);
     setWhiteList(temp2);
   };
 
-  const [whiteList, setWhiteList] = React.useState<whitelist[]>([{ address: '', num: 0 }]);
+  const [whiteList, setWhiteList] = React.useState<whitelist[]>([]);
 
   const confirmWhiteList = async () => {
     // seedAllowlist
     if (contract) {
-      setSpin(true);
-      let addrs: string[] = [];
-      let nums: number[] = [];
-      whiteList.map((item) => {
-        addrs.push(item.address);
-        nums.push(item.num);
-      });
-      const tx = await contract.seedAllowlist(addrs, nums);
-      const res = await tx.wait;
-
-      setSpin(false);
-    }
-  };
-
-  const [balance, setBalance] = React.useState<string>();
-  const getNewBalance = async () => {
-    if (provider && contract) {
-      setSpin(true);
-      const balance = await provider.getBalance(contract.address);
-      const temp = ethers.utils.formatEther(balance);
-      setBalance(temp);
+      try {
+        setSpin(true);
+        let addrs: string[] = [];
+        let nums: number[] = [];
+        whiteList.map((item) => {
+          addrs.push(item.address);
+          nums.push(item.num);
+        });
+        const tx = await contract.seedAllowlist(addrs, nums);
+        const res = await tx.wait;
+        console.log(res);
+        await getSetting(contract);
+      } catch (error) {
+        setTxError(error);
+      }
       setSpin(false);
     }
   };
 
   const withDraw = async () => {
     if (contract) {
-      setSpin(true);
-      const tx = await contract.withdraw();
-      await tx.wait();
+      try {
+        setSpin(true);
+        const tx = await contract.withdraw();
+        await tx.wait();
+        await getSetting(contract);
+      } catch (error) {
+        setTxError(error);
+      }
+      setSpin(false);
+    }
+  };
+
+  const [whitelistPause, setWhitelistPause] = React.useState<boolean>(false);
+
+  const pauseWhitelistMint = async (e: any) => {
+    if (contract) {
+      try {
+        setSpin(true);
+        if (e.target.checked) {
+          const tx = await contract.allowlistPause();
+          const res = tx.wait();
+          console.log(res);
+        } else {
+          const tx = await contract.allowlistUnpause();
+          const res = await tx.wait();
+          console.log(res);
+        }
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
+      }
+      setSpin(false);
+    }
+  };
+
+  const [members, setMembers] = React.useState<string[]>([]);
+  const addMember = async (address: string) => {
+    if (contract) {
+      try {
+        setSpin(true);
+        const tx = await contract.addMember(address);
+        const res = tx.wait();
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
+      }
+      setSpin(false);
+    }
+  };
+
+  const removeMember = async (address: string) => {
+    if (!ethers.utils.isAddress(address)) {
+      return;
+    }
+    if (contract) {
+      try {
+        setSpin(true);
+        const tx = await contract.removeMember(address);
+        const res = tx.wait();
+        await getSetting(contract!);
+      } catch (error) {
+        setTxError(error);
+      }
       setSpin(false);
     }
   };
@@ -331,12 +434,6 @@ function App() {
         Set NFT price (ETH)
       </Button>
 
-      <Input defaultValue={newMaxSupply} onChange={(e) => setNewMaxSupply(e.target.value)} />
-
-      <Button colorScheme="blue" onClick={setMaxSupply}>
-        Set maxSupply
-      </Button>
-
       <Input defaultValue={newBaseURI} onChange={(e) => setNewBaseURI(e.target.value)}></Input>
 
       <Button colorScheme="blue" onClick={setBaseURI}>
@@ -349,22 +446,11 @@ function App() {
         Set Max PerAddress Mint
       </Button>
 
-      {/** Operate */}
-      <Text className="col-span-2">Operate</Text>
-
       <Text>Pause Mint</Text>
       <Switch isChecked={pause} onChange={pauseMint} />
 
-      <Text>Balance: {balance}</Text>
-      <Button colorScheme="blue" onClick={getNewBalance}>
-        Get Balance
-      </Button>
-      <Button className="col-span-2" colorScheme="blue" onClick={withDraw}>
-        Withdraw
-      </Button>
-
-      {/** Blind Box */}
-      <Text className="col-span-2"> Blind Box</Text>
+      {/** Blind Box*/}
+      <Text className="col-span-2">Blind Box</Text>
 
       <Input
         defaultValue={newBlindTokenURI}
@@ -379,6 +465,18 @@ function App() {
 
       {/** White List*/}
       <Text className="col-span-2">White List</Text>
+
+      <Text>Pause Whitelist Mint</Text>
+      <Switch isChecked={whitelistPause} onChange={pauseWhitelistMint} />
+
+      <Input
+        defaultValue={newWhitelistPrice}
+        onChange={(e) => setNewWhitelistPrice(e.target.value)}
+      />
+
+      <Button colorScheme="blue" onClick={setWhitelistPrice}>
+        Set Whitelist NFT price (ETH)
+      </Button>
 
       {whiteList.map((item, index) => (
         <div key={index} className="col-span-2 flex">
@@ -408,19 +506,24 @@ function App() {
         </div>
       ))}
 
-      <div />
       <Button
         colorScheme="blue"
         onClick={() => {
           setWhiteList([...whiteList, { address: '', num: 0 }]);
         }}
+        className="col-span-1"
       >
         Add
       </Button>
-
-      <div />
       <Button colorScheme="blue" onClick={confirmWhiteList}>
         Confirm white list
+      </Button>
+
+      {/** Operate */}
+      <Text className="col-span-2">Operate</Text>
+
+      <Button className="col-span-2" colorScheme="blue" onClick={withDraw}>
+        Withdraw
       </Button>
     </div>
   );
@@ -444,13 +547,20 @@ function App() {
     setSpin(false);
   };
 
+  const [allowMintNum, setAllowMintNum] = React.useState<number>(0);
   const allowMint = async () => {
     try {
       if (contract) {
         setSpin(true);
-        const tx = await contract.allowlistMint({
-          value: ethers.utils.parseUnits(profile!.nftPrice, 'ether'),
-        });
+        const price = ethers.utils.parseUnits(
+          ethers.BigNumber.from(+newWhitelistPrice)
+            .mul(allowMintNum)
+            .toString(),
+          'ether',
+        );
+        console.log({ price: price.toString() });
+        const tx = await contract.allowlistMint(allowMintNum, { value: price });
+        console.log('CCCC');
         const res = await tx.wait();
         console.log(res);
       }
@@ -459,6 +569,118 @@ function App() {
     }
     setSpin(false);
   };
+
+  interface sharingMember {
+    address: string;
+    share: number;
+  }
+
+  const [sharingMembers, setSharingMembers] = React.useState<sharingMember[]>([]);
+
+  const deleteSharinList = (index: number) => {
+    const temp = [...sharingMembers];
+    const temp2 = temp.filter((item, i) => i !== index);
+    setSharingMembers(temp2);
+  };
+
+  const confirmSharingList = async () => {
+    if (contract) {
+      try {
+        setSpin(true);
+        let addrs: string[] = [];
+        let shares: number[] = [];
+        sharingMembers.map((item) => {
+          addrs.push(item.address);
+          shares.push(item.share);
+        });
+        const tx = await contract.updateSharing(addrs, shares);
+        const res = await tx.wait;
+        console.log(res);
+      } catch (error) {
+        setTxError(error);
+      }
+      setSpin(false);
+    }
+  };
+
+  const renderAdmin = () => (
+    <div className="grid grid-cols-2 gap-2">
+      {/** Members */}
+      <Text className="col-span-2">Members</Text>
+
+      {members.map((address, index) => (
+        <div key={index} className="col-span-2 flex">
+          <Input
+            placeholder="address"
+            value={address}
+            onChange={(e) => {
+              const temp = [...members];
+              temp[index] = e.target.value;
+              setMembers(temp);
+            }}
+          ></Input>
+
+          {index === members.length - 1 ? (
+            <Button
+              colorScheme="blue"
+              onClick={() => addMember(members[index])}
+              className="col-span-1"
+            >
+              Add
+            </Button>
+          ) : (
+            <Button colorScheme="blue" onClick={() => removeMember(members[index])}>
+              Del
+            </Button>
+          )}
+        </div>
+      ))}
+
+      {/** Sharing Member */}
+      <Text className="col-span-2">Sharing Members</Text>
+
+      {sharingMembers.map((member, index) => (
+        <div className="col-span-2 flex">
+          <Input
+            placeholder="address"
+            value={member.address}
+            onChange={(e) => {
+              const temp = [...sharingMembers];
+              temp[index].address = e.target.value;
+              setSharingMembers(temp);
+            }}
+          ></Input>
+
+          <Input
+            placeholder="number"
+            value={member.share}
+            onChange={(e) => {
+              const temp = [...sharingMembers];
+              temp[index].share = +e.target.value;
+              setSharingMembers(temp);
+            }}
+          ></Input>
+
+          <Button colorScheme="blue" onClick={() => deleteSharinList(index)}>
+            Del
+          </Button>
+        </div>
+      ))}
+
+      <Button
+        colorScheme="blue"
+        onClick={() => {
+          setSharingMembers([...sharingMembers, { address: '', share: 0 }]);
+        }}
+        className="col-span-1"
+      >
+        Add
+      </Button>
+      <Button colorScheme="blue" onClick={confirmSharingList}>
+        Confirm sharing list
+      </Button>
+    </div>
+  );
 
   const renderMint = () => (
     <div className="grid grid-cols-3 gap-2">
@@ -474,7 +696,15 @@ function App() {
         Mint
       </Button>
 
-      <Button className="col-span-3" colorScheme="blue" onClick={allowMint}>
+      <NumberInput onChange={(v, n) => setAllowMintNum(n)} min={0}>
+        <NumberInputField />
+        <NumberInputStepper>
+          <NumberIncrementStepper />
+          <NumberDecrementStepper />
+        </NumberInputStepper>
+      </NumberInput>
+
+      <Button className="col-span-2" colorScheme="blue" onClick={allowMint}>
         WhiteList Mint
       </Button>
     </div>
@@ -558,7 +788,6 @@ function App() {
 
   return (
     <div className="App">
-      <h1 className="text-3xl font-bold underline">Hello world!</h1>
       {spin && <Spinner />}
       {errorMessage && <Text color="red">{errorMessage}</Text>}
       <div className="card">
@@ -580,11 +809,14 @@ function App() {
       </div>
       <div>
         <p>{address}</p>
+        <Text color="#ED64A6">Account Balance: {balance}</Text>
+        <Text color="#ED64A6">Contract Balance: {contractBalance}</Text>
       </div>
       <Tabs>
         <TabList>
           <Tab>Contract Profile</Tab>
           <Tab>Contract Setting</Tab>
+          <Tab>Contract Admin Setting</Tab>
           <Tab>Mint</Tab>
           <Tab>Info</Tab>
         </TabList>
@@ -592,6 +824,7 @@ function App() {
         <TabPanels>
           <TabPanel>{renderProfile()}</TabPanel>
           <TabPanel>{renderSetting()}</TabPanel>
+          <TabPanel>{renderAdmin()}</TabPanel>
           <TabPanel>{renderMint()}</TabPanel>
           <TabPanel>{renderInfo()}</TabPanel>
         </TabPanels>
