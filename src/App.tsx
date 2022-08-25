@@ -94,9 +94,12 @@ function App() {
     const ethereum = window.ethereum;
     if (ethereum) {
       setSpin(true);
-      const p = new ethers.providers.Web3Provider(ethereum);
+      // 使用metamask
+      // const p = new ethers.providers.Web3Provider(ethereum);
+      // 使用自架節點
+      const p = new ethers.providers.JsonRpcProvider('https://hardhat.caprover.credot-web.com');
       await ethereum.enable();
-      await p.send('eth_requestAccounts', []);
+      // await p.send('eth_requestAccounts', []);
       setProvider(p);
 
       // @ts-ignore
@@ -203,6 +206,10 @@ function App() {
   React.useEffect(() => {
     updateAccount();
   }, [secretKey]);
+
+  const copyAddress = () => {
+    navigator.clipboard.writeText(address);
+  };
 
   const renderProfile = () => {
     if (!profile) {
@@ -860,6 +867,7 @@ function App() {
           contractAddress={contractAddress}
           contractBalance={contractBalance}
           setSecretKey={setSecretKey}
+          copyAddress={copyAddress}
         />
       </div>
       <Tabs className="mt-6">
