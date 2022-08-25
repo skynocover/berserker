@@ -25,6 +25,9 @@ import {
   Spinner,
 } from '@chakra-ui/react';
 
+import { Deploy } from './Deploy';
+import { Profile } from './Profile';
+
 interface contractProfile {
   nftName: string;
   symbol: string;
@@ -35,16 +38,33 @@ interface contractProfile {
 }
 
 function App() {
+  ////////////////////    測試階段才需要      //////////////////
+  const getNonce = async () => {
+    const nonce = await provider!.getTransactionCount(address);
+    console.log({ nonce, address });
+    return nonce;
+  };
+  ////////////////////    測試階段才需要      //////////////////
+
   const [spin, setSpin] = React.useState<boolean>(false);
   const [txError, setTxError] = React.useState<any>();
   const [errorMessage, setErrorMessage] = React.useState<string>('');
+
   const [provider, setProvider] = React.useState<ethers.providers.JsonRpcProvider>();
-  const [address, setAddress] = React.useState<string>('');
+  const [signer, setSigner] = React.useState<ethers.providers.JsonRpcSigner | ethers.Wallet>();
   const [chainName, setChainName] = React.useState<string>('');
   const [contract, setContract] = React.useState<ethers.Contract>();
   const [profile, setProfile] = React.useState<contractProfile>();
-  const [contractBalance, setContractBalance] = React.useState<string>();
+
+  const [secretKey, setSecretKey] = React.useState<string>(
+    '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+  );
+  const [address, setAddress] = React.useState<string>('');
   const [balance, setBalance] = React.useState<string>('');
+  const [contractAddress, setContractAddress] = React.useState<string>(
+    import.meta.env.VITE_CONTRACT_ADDRESS,
+  );
+  const [contractBalance, setContractBalance] = React.useState<string>('');
 
   React.useEffect(() => {
     if (spin) {
@@ -62,6 +82,8 @@ function App() {
         const temp = m.match(/(?<=errorArgs=)(.*?)(?=, errorName)/);
         if (temp && temp[0]) {
           setErrorMessage(temp[0]);
+        } else {
+          setErrorMessage(m);
         }
       }
     }
@@ -70,39 +92,25 @@ function App() {
   const init = async () => {
     // @ts-ignore
     const ethereum = window.ethereum;
-    if (ethereum && !provider) {
+    if (ethereum) {
       setSpin(true);
-      // @ts-ignore
       const p = new ethers.providers.Web3Provider(ethereum);
-      // @ts-ignore
       await ethereum.enable();
       await p.send('eth_requestAccounts', []);
       setProvider(p);
 
       // @ts-ignore
-      ethereum.on('accountsChanged', async (accounts: Array<string>) => {
-        setAddress(accounts[0]);
-        setBalance(ethers.utils.formatEther(await signer.getBalance()));
-      });
+      // 用於偵測metamask換帳號
+      // ethereum.on('accountsChanged', async (accounts: Array<string>) => {
+      //   setAddress(accounts[0]);
+      //   setBalance(ethers.utils.formatEther(await signer.getBalance()));
+      // });
 
       const { name } = await p.getNetwork();
       setChainName(name);
 
-      const signer = p.getSigner();
-      setAddress(await signer.getAddress());
-
-      setBalance(ethers.utils.formatEther(await signer.getBalance()));
-
-      const c = new ethers.Contract(
-        import.meta.env.VITE_CONTRACT_ADDRESS,
-        contractJson.abi,
-        signer,
-      );
-      console.log(c);
-      setContract(c);
-
-      const balance = await p.getBalance(c.address);
-      setContractBalance(ethers.utils.formatEther(balance));
+      const c = await updateAccount(p);
+      setContractBalance(ethers.utils.formatEther(await p.getBalance(c.address)));
 
       await getSetting(c);
       setSpin(false);
@@ -110,56 +118,91 @@ function App() {
   };
 
   const getSetting = async (contract: ethers.Contract) => {
-    if (contract) {
-      const nftName = await contract.name();
-      const symbol = await contract.symbol();
-      const maxSupply = (await contract.maxSupply()).toString();
-      const totalSupply = (await contract.totalSupply()).toString();
-      const nftPrice = ethers.utils.formatEther(await contract.nftPrice());
-      const maxPerAddressMint = (await contract.maxPerAddressMint()).toString();
+    const nftName = await contract.name();
+    const symbol = await contract.symbol();
+    const maxSupply = (await contract.maxSupply()).toString();
+    const totalSupply = (await contract.totalSupply()).toString();
+    const nftPrice = ethers.utils.formatEther(await contract.nftPrice());
+    const maxPerAddressMint = (await contract.maxPerAddressMint()).toString();
 
-      setProfile({ nftName, symbol, totalSupply, maxSupply, nftPrice, maxPerAddressMint });
-      setNewPrice(nftPrice);
+    setProfile({ nftName, symbol, totalSupply, maxSupply, nftPrice, maxPerAddressMint });
+    setNewPrice(nftPrice);
 
-      setNewBaseURI(await contract.baseURI());
-      setPause(await contract.paused());
-      setNewBlindTokenURI(await contract.blindTokenURI());
-      setNewMaxMint((await contract.maxPerAddressMint()).toString());
-      setWhitelistPause(await contract.allowlistPaused());
-      setNewWhitelistPrice(ethers.utils.formatEther(await contract.allowlistNftPrice()));
+    setNewBaseURI(await contract.baseURI());
+    setPause(await contract.paused());
+    setNewBlindTokenURI(await contract.blindTokenURI());
+    setBlindBoxOpened(await contract.blindBoxOpened());
+    setNewMaxMint((await contract.maxPerAddressMint()).toString());
+    setWhitelistPause(await contract.allowlistPaused());
+    setNewWhitelistPrice(ethers.utils.formatEther(await contract.allowlistNftPrice()));
 
-      const DEFAULT_ADMIN_ROLE =
-        '0x0000000000000000000000000000000000000000000000000000000000000000';
-      const minterCount = (await contract.getRoleMemberCount(DEFAULT_ADMIN_ROLE)).toNumber();
-      const members = [];
-      for (let i = 0; i < minterCount; ++i) {
-        members.push(await contract.getRoleMember(DEFAULT_ADMIN_ROLE, i));
-      }
-      setMembers([...members, '']);
-
-      if (provider) {
-        const balance = await provider.getBalance(contract.address);
-        const temp = ethers.utils.formatEther(balance);
-        setContractBalance(temp);
-      }
-
-      const sharingMember: sharingMember[] = [];
-      const sharingCount = (await contract.getSharingMemberCount()).toNumber();
-      for (let i = 0; i < sharingCount; i++) {
-        const sharing = await contract.getSharingMember(i);
-        sharingMember.push({
-          address: sharing[0],
-          share: sharing[1].toNumber(),
-        });
-      }
-      setSharingMembers(sharingMember);
+    if (provider) {
+      const balance = await provider.getBalance(contract.address);
+      const temp = ethers.utils.formatEther(balance);
+      setContractBalance(temp);
     }
+
+    // member
+    const DEFAULT_ADMIN_ROLE = '0x0000000000000000000000000000000000000000000000000000000000000000';
+    const minterCount = (await contract.getRoleMemberCount(DEFAULT_ADMIN_ROLE)).toNumber();
+    const members = [];
+    for (let i = 0; i < minterCount; ++i) {
+      members.push(await contract.getRoleMember(DEFAULT_ADMIN_ROLE, i));
+    }
+    setMembers([...members, '']);
+
+    // sharing member
+    const sharingMember: sharingMember[] = [];
+    const sharingCount = (await contract.getSharingMemberCount()).toNumber();
+    for (let i = 0; i < sharingCount; i++) {
+      const sharing = await contract.getSharingMember(i);
+      sharingMember.push({
+        address: sharing[0],
+        share: sharing[1].toNumber(),
+      });
+    }
+    setSharingMembers(sharingMember);
   };
 
   React.useEffect(() => {
     init();
     // @ts-ignore
   }, [window.ethereum]);
+
+  React.useEffect(() => {
+    const c = new ethers.Contract(contractAddress, contractJson.abi, signer);
+    setContract(c);
+    getSetting(c);
+  }, [contractAddress]);
+
+  React.useEffect(() => {
+    if (signer) {
+      signer.getAddress().then((address) => setAddress(address));
+      signer.getBalance().then((eth) => setBalance(ethers.utils.formatEther(eth)));
+    }
+  }, [signer]);
+
+  const updateAccount = async (p = provider): Promise<ethers.Contract> => {
+    if (secretKey === 'user account') {
+      const signer = p!.getSigner();
+      setSigner(signer);
+
+      const c = new ethers.Contract(contractAddress, contractJson.abi, signer);
+      setContract(c);
+      return c;
+    } else {
+      const w = new ethers.Wallet(secretKey, p);
+      setSigner(w);
+
+      const c = new ethers.Contract(contractAddress, contractJson.abi, w);
+      setContract(c);
+      return c;
+    }
+  };
+
+  React.useEffect(() => {
+    updateAccount();
+  }, [secretKey]);
 
   const renderProfile = () => {
     if (!profile) {
@@ -210,7 +253,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.setNftPrice(wai.toString());
+        const tx = await contract.setNftPrice(wai.toString(), { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract!);
@@ -227,7 +270,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.setAllowlistNftPrice(wai.toString());
+        const tx = await contract.setAllowlistNftPrice(wai.toString(), { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract!);
@@ -243,7 +286,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract!.setBaseURI(newBaseURI);
+        const tx = await contract!.setBaseURI(newBaseURI, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract!);
@@ -259,7 +302,7 @@ function App() {
     setSpin(true);
     if (contract) {
       try {
-        const tx = await contract.setMaxPerAddressMint(newMaxMint);
+        const tx = await contract.setMaxPerAddressMint(newMaxMint, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract);
@@ -275,7 +318,7 @@ function App() {
     setSpin(true);
     if (contract) {
       try {
-        const tx = await contract.setBlindTokenURI(newBlindTokenURI);
+        const tx = await contract.setBlindTokenURI(newBlindTokenURI, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract);
@@ -286,11 +329,13 @@ function App() {
     setSpin(false);
   };
 
+  const [blindBoxOpened, setBlindBoxOpened] = React.useState<boolean>(false);
+
   const setBlindBox = async (e: any) => {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.setBlindBoxOpened(e.target.checked);
+        const tx = await contract.setBlindBoxOpened(e.target.checked, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
         await getSetting(contract);
@@ -308,13 +353,14 @@ function App() {
       try {
         setSpin(true);
         if (e.target.checked) {
-          const tx = await contract.pause();
+          const tx = await contract.pause({ nonce: await getNonce() });
           const res = tx.wait();
         } else {
-          const tx = await contract.unpause();
+          const tx = await contract.unpause({ nonce: await getNonce() });
           const res = await tx.wait();
         }
-        await getSetting(contract!);
+        console.log('BBB');
+        await getSetting(contract);
       } catch (error) {
         setTxError(error);
       }
@@ -344,7 +390,7 @@ function App() {
           addrs.push(item.address);
           nums.push(item.num);
         });
-        const tx = await contract.seedAllowlist(addrs, nums);
+        const tx = await contract.seedAllowlist(addrs, nums, { nonce: await getNonce() });
         const res = await tx.wait;
         console.log(res);
         await getSetting(contract);
@@ -359,7 +405,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.withdraw();
+        const tx = await contract.withdraw({ nonce: await getNonce() });
         await tx.wait();
         await getSetting(contract);
       } catch (error) {
@@ -376,11 +422,11 @@ function App() {
       try {
         setSpin(true);
         if (e.target.checked) {
-          const tx = await contract.allowlistPause();
+          const tx = await contract.allowlistPause({ nonce: await getNonce() });
           const res = tx.wait();
           console.log(res);
         } else {
-          const tx = await contract.allowlistUnpause();
+          const tx = await contract.allowlistUnpause({ nonce: await getNonce() });
           const res = await tx.wait();
           console.log(res);
         }
@@ -397,7 +443,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.addMember(address);
+        const tx = await contract.addMember(address, { nonce: await getNonce() });
         const res = tx.wait();
         await getSetting(contract!);
       } catch (error) {
@@ -414,7 +460,7 @@ function App() {
     if (contract) {
       try {
         setSpin(true);
-        const tx = await contract.removeMember(address);
+        const tx = await contract.removeMember(address, { nonce: await getNonce() });
         const res = tx.wait();
         await getSetting(contract!);
       } catch (error) {
@@ -428,19 +474,19 @@ function App() {
     <div className="grid grid-cols-2 gap-2">
       <Text className="col-span-2"> Basic Setting</Text>
 
-      <Input defaultValue={newPrice} onChange={(e) => setNewPrice(e.target.value)} />
+      <Input value={newPrice} onChange={(e) => setNewPrice(e.target.value)} />
 
       <Button colorScheme="blue" onClick={setPrice}>
         Set NFT price (ETH)
       </Button>
 
-      <Input defaultValue={newBaseURI} onChange={(e) => setNewBaseURI(e.target.value)}></Input>
+      <Input value={newBaseURI} onChange={(e) => setNewBaseURI(e.target.value)}></Input>
 
       <Button colorScheme="blue" onClick={setBaseURI}>
         Set BaseURI
       </Button>
 
-      <Input defaultValue={newMaxMint} onChange={(e) => setNewMaxMint(e.target.value)}></Input>
+      <Input value={newMaxMint} onChange={(e) => setNewMaxMint(e.target.value)}></Input>
 
       <Button colorScheme="blue" onClick={setMaxMint}>
         Set Max PerAddress Mint
@@ -452,16 +498,13 @@ function App() {
       {/** Blind Box*/}
       <Text className="col-span-2">Blind Box</Text>
 
-      <Input
-        defaultValue={newBlindTokenURI}
-        onChange={(e) => setNewBlindTokenURI(e.target.value)}
-      ></Input>
+      <Input value={newBlindTokenURI} onChange={(e) => setNewBlindTokenURI(e.target.value)}></Input>
       <Button colorScheme="blue" onClick={setBlindTokenURI}>
         Blind Token URI
       </Button>
 
       <Text>BlindBox Open</Text>
-      <Switch onChange={setBlindBox} />
+      <Switch isChecked={blindBoxOpened} onChange={setBlindBox} />
 
       {/** White List*/}
       <Text className="col-span-2">White List</Text>
@@ -528,48 +571,6 @@ function App() {
     </div>
   );
 
-  const [mintNum, setMintNum] = React.useState<number>(0);
-  const mint = async () => {
-    try {
-      if (contract) {
-        setSpin(true);
-        const tx = await contract.mint(mintNum, {
-          value: ethers.utils
-            .parseUnits(profile!.nftPrice, 'ether')
-            .mul(ethers.BigNumber.from(mintNum)),
-        });
-        const res = await tx.wait();
-        console.log(res);
-      }
-    } catch (error: any) {
-      setTxError(error);
-    }
-    setSpin(false);
-  };
-
-  const [allowMintNum, setAllowMintNum] = React.useState<number>(0);
-  const allowMint = async () => {
-    try {
-      if (contract) {
-        setSpin(true);
-        const price = ethers.utils.parseUnits(
-          ethers.BigNumber.from(+newWhitelistPrice)
-            .mul(allowMintNum)
-            .toString(),
-          'ether',
-        );
-        console.log({ price: price.toString() });
-        const tx = await contract.allowlistMint(allowMintNum, { value: price });
-        console.log('CCCC');
-        const res = await tx.wait();
-        console.log(res);
-      }
-    } catch (error: any) {
-      setTxError(error);
-    }
-    setSpin(false);
-  };
-
   interface sharingMember {
     address: string;
     share: number;
@@ -593,7 +594,7 @@ function App() {
           addrs.push(item.address);
           shares.push(item.share);
         });
-        const tx = await contract.updateSharing(addrs, shares);
+        const tx = await contract.updateSharing(addrs, shares, { nonce: await getNonce() });
         const res = await tx.wait;
         console.log(res);
       } catch (error) {
@@ -681,6 +682,51 @@ function App() {
       </Button>
     </div>
   );
+
+  const [mintNum, setMintNum] = React.useState<number>(0);
+  const mint = async () => {
+    try {
+      if (contract) {
+        setSpin(true);
+        const tx = await contract.mint(mintNum, {
+          value: ethers.utils
+            .parseUnits(profile!.nftPrice, 'ether')
+            .mul(ethers.BigNumber.from(mintNum)),
+
+          nonce: await getNonce(),
+        });
+        const res = await tx.wait();
+        console.log(res);
+      }
+    } catch (error: any) {
+      setTxError(error);
+    }
+    setSpin(false);
+  };
+
+  const [allowMintNum, setAllowMintNum] = React.useState<number>(0);
+  const allowMint = async () => {
+    try {
+      if (contract) {
+        setSpin(true);
+        const price = ethers.utils.parseUnits(
+          ethers.BigNumber.from(+newWhitelistPrice)
+            .mul(allowMintNum)
+            .toString(),
+          'ether',
+        );
+        const tx = await contract.allowlistMint(allowMintNum, {
+          value: price,
+          nonce: await getNonce(),
+        });
+        const res = await tx.wait();
+        console.log(res);
+      }
+    } catch (error: any) {
+      setTxError(error);
+    }
+    setSpin(false);
+  };
 
   const renderMint = () => (
     <div className="grid grid-cols-3 gap-2">
@@ -808,17 +854,22 @@ function App() {
         </p>
       </div>
       <div>
-        <p>{address}</p>
-        <Text color="#ED64A6">Account Balance: {balance}</Text>
-        <Text color="#ED64A6">Contract Balance: {contractBalance}</Text>
+        <Profile
+          address={address}
+          balance={balance}
+          contractAddress={contractAddress}
+          contractBalance={contractBalance}
+          setSecretKey={setSecretKey}
+        />
       </div>
-      <Tabs>
+      <Tabs className="mt-6">
         <TabList>
           <Tab>Contract Profile</Tab>
           <Tab>Contract Setting</Tab>
           <Tab>Contract Admin Setting</Tab>
           <Tab>Mint</Tab>
           <Tab>Info</Tab>
+          <Tab>Deploy</Tab>
         </TabList>
 
         <TabPanels>
@@ -827,6 +878,9 @@ function App() {
           <TabPanel>{renderAdmin()}</TabPanel>
           <TabPanel>{renderMint()}</TabPanel>
           <TabPanel>{renderInfo()}</TabPanel>
+          <TabPanel>
+            <Deploy provider={provider} setContractAddress={setContractAddress} signer={signer} />
+          </TabPanel>
         </TabPanels>
       </Tabs>
     </div>
