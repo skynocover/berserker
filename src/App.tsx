@@ -117,19 +117,21 @@ function App() {
       new ethers.Contract(import.meta.env.VITE_CONTRACT_ADDRESS, contractJson.abi, signer),
     );
 
+    await getSetting();
+
     setSpin(false);
   };
 
-  React.useEffect(() => {
-    // @ts-ignore
-    if (window.ethereum) {
-      // @ts-ignore
-      init(window.ethereum);
-    } else {
-      // 如果沒有安裝metamask要另外處理
-    }
-    // @ts-ignore
-  }, [window.ethereum]);
+  // React.useEffect(() => {
+  //   // @ts-ignore
+  //   if (window.ethereum) {
+  //     // @ts-ignore
+  //     init(window.ethereum);
+  //   } else {
+  //     // 如果沒有安裝metamask要另外處理
+  //   }
+  //   // @ts-ignore
+  // }, [window.ethereum]);
 
   const getSetting = async () => {
     if (contract) {
@@ -176,10 +178,6 @@ function App() {
       setSharingMembers(sharingMember);
     }
   };
-
-  React.useEffect(() => {
-    getSetting();
-  }, [contract]);
 
   const switchNetwork = async () => {
     try {
@@ -869,7 +867,13 @@ function App() {
             </Text>
           )} */}
         </p>
-        <Button colorScheme="blue" onClick={() => {}}>
+        <Button
+          colorScheme="blue"
+          onClick={() => {
+            // @ts-ignore
+            init(window.ethereum);
+          }}
+        >
           Connect Wallet
         </Button>
         <Button colorScheme="blue" onClick={web3Login}>
