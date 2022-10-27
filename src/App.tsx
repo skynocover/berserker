@@ -2,6 +2,8 @@ import React from 'react';
 import './App.css';
 
 import { ethers } from 'ethers';
+import Web3Token from 'web3-token';
+import axios from 'axios';
 
 import { Tabs, TabList, TabPanels, Tab, TabPanel, Link, Text, Input } from '@chakra-ui/react';
 import { Button, ButtonGroup } from '@chakra-ui/react';
@@ -41,7 +43,7 @@ function App() {
   ////////////////////    測試階段才需要      //////////////////
   const getNonce = async () => {
     const nonce = await provider!.getTransactionCount(address);
-    console.log({ nonce, address });
+    // console.log({ nonce, address });
     return nonce;
   };
   ////////////////////    測試階段才需要      //////////////////
@@ -52,26 +54,16 @@ function App() {
 
   const [provider, setProvider] = React.useState<ethers.providers.JsonRpcProvider>();
   const [signer, setSigner] = React.useState<ethers.providers.JsonRpcSigner | ethers.Wallet>();
-  const [chainName, setChainName] = React.useState<string>('');
+  const [chainId, setChainId] = React.useState<number>();
   const [contract, setContract] = React.useState<ethers.Contract>();
   const [profile, setProfile] = React.useState<contractProfile>();
 
-  const [secretKey, setSecretKey] = React.useState<string>(
-    '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-  );
+  const [secretKey, setSecretKey] = React.useState<string>('user account');
   const [address, setAddress] = React.useState<string>('');
   const [balance, setBalance] = React.useState<string>('');
-  const [contractAddress, setContractAddress] = React.useState<string>(
-    import.meta.env.VITE_CONTRACT_ADDRESS,
-  );
   const [contractBalance, setContractBalance] = React.useState<string>('');
 
-  React.useEffect(() => {
-    if (spin) {
-      setErrorMessage('');
-    }
-  }, [spin]);
-
+  // 顯示/移除 錯誤訊息
   React.useEffect(() => {
     if (txError) {
       const m = txError.message;
@@ -87,129 +79,143 @@ function App() {
         }
       }
     }
-  }, [txError]);
-
-  const init = async () => {
-    // @ts-ignore
-    const ethereum = window.ethereum;
-    if (ethereum) {
-      setSpin(true);
-      // 使用metamask
-      // const p = new ethers.providers.Web3Provider(ethereum);
-      // 使用自架節點
-      const p = new ethers.providers.JsonRpcProvider('https://hardhat.caprover.credot-web.com');
-      await ethereum.enable();
-      // await p.send('eth_requestAccounts', []);
-      setProvider(p);
-
-      // @ts-ignore
-      // 用於偵測metamask換帳號
-      // ethereum.on('accountsChanged', async (accounts: Array<string>) => {
-      //   setAddress(accounts[0]);
-      //   setBalance(ethers.utils.formatEther(await signer.getBalance()));
-      // });
-
-      const { name } = await p.getNetwork();
-      setChainName(name);
-
-      const c = await updateAccount(p);
-      setContractBalance(ethers.utils.formatEther(await p.getBalance(c.address)));
-
-      await getSetting(c);
-      setSpin(false);
+    if (spin) {
+      setErrorMessage('');
     }
-  };
+  }, [txError, spin]);
 
-  const getSetting = async (contract: ethers.Contract) => {
-    const nftName = await contract.name();
-    const symbol = await contract.symbol();
-    const maxSupply = (await contract.maxSupply()).toString();
-    const totalSupply = (await contract.totalSupply()).toString();
-    const nftPrice = ethers.utils.formatEther(await contract.nftPrice());
-    const maxPerAddressMint = (await contract.maxPerAddressMint()).toString();
+  const init = async (ethereum: any) => {
+    // 用於偵測metamask換帳號
+    ethereum.on('accountsChanged', async (accounts: Array<string>) => {
+      setAddress(accounts[0]);
+    });
 
-    setProfile({ nftName, symbol, totalSupply, maxSupply, nftPrice, maxPerAddressMint });
-    setNewPrice(nftPrice);
+    setSpin(true);
+    await ethereum.enable();
+    const p = new ethers.providers.Web3Provider(ethereum);
+    // await p.send('eth_requestAccounts', []);
+    setProvider(p);
 
-    setNewBaseURI(await contract.baseURI());
-    setPause(await contract.paused());
-    setNewBlindTokenURI(await contract.blindTokenURI());
-    setBlindBoxOpened(await contract.blindBoxOpened());
-    setNewMaxMint((await contract.maxPerAddressMint()).toString());
-    setWhitelistPause(await contract.allowlistPaused());
-    setNewWhitelistPrice(ethers.utils.formatEther(await contract.allowlistNftPrice()));
+    /* @ts-ignore */
+    window.p = p;
 
-    if (provider) {
-      const balance = await provider.getBalance(contract.address);
-      const temp = ethers.utils.formatEther(balance);
-      setContractBalance(temp);
-    }
+    const { chainId } = await p.getNetwork();
+    setChainId(chainId);
 
-    // member
-    const DEFAULT_ADMIN_ROLE = '0x0000000000000000000000000000000000000000000000000000000000000000';
-    const minterCount = (await contract.getRoleMemberCount(DEFAULT_ADMIN_ROLE)).toNumber();
-    const members = [];
-    for (let i = 0; i < minterCount; ++i) {
-      members.push(await contract.getRoleMember(DEFAULT_ADMIN_ROLE, i));
-    }
-    setMembers([...members, '']);
+    const balance = await p.getBalance(import.meta.env.VITE_CONTRACT_ADDRESS);
+    const temp = ethers.utils.formatEther(balance);
+    setContractBalance(temp);
 
-    // sharing member
-    const sharingMember: sharingMember[] = [];
-    const sharingCount = (await contract.getSharingMemberCount()).toNumber();
-    for (let i = 0; i < sharingCount; i++) {
-      const sharing = await contract.getSharingMember(i);
-      sharingMember.push({
-        address: sharing[0],
-        share: sharing[1].toNumber(),
-      });
-    }
-    setSharingMembers(sharingMember);
+    const signer = p.getSigner();
+    setSigner(signer);
+    // const w = new ethers.Wallet(secretKey, p);
+    // setSigner(w);
+
+    signer.getAddress().then((address) => setAddress(address));
+    signer.getBalance().then((eth) => setBalance(ethers.utils.formatEther(eth)));
+    setContract(
+      new ethers.Contract(import.meta.env.VITE_CONTRACT_ADDRESS, contractJson.abi, signer),
+    );
+
+    setSpin(false);
   };
 
   React.useEffect(() => {
-    init();
+    // @ts-ignore
+    if (window.ethereum) {
+      // @ts-ignore
+      init(window.ethereum);
+    } else {
+      // 如果沒有安裝metamask要另外處理
+    }
     // @ts-ignore
   }, [window.ethereum]);
 
-  React.useEffect(() => {
-    const c = new ethers.Contract(contractAddress, contractJson.abi, signer);
-    setContract(c);
-    getSetting(c);
-  }, [contractAddress]);
+  const getSetting = async () => {
+    if (contract) {
+      // profile
+      const nftName = await contract.name();
+      const symbol = await contract.symbol();
+      const maxSupply = (await contract.maxSupply()).toString();
+      const totalSupply = (await contract.totalSupply()).toString();
+      const nftPrice = ethers.utils.formatEther(await contract.nftPrice());
+      const maxPerAddressMint = (await contract.maxPerAddressMint()).toString();
+
+      setProfile({ nftName, symbol, totalSupply, maxSupply, nftPrice, maxPerAddressMint });
+
+      // contract setting
+      setNewPrice(nftPrice);
+      setNewBaseURI(await contract.baseURI());
+      setPause(await contract.paused());
+      setNewBlindTokenURI(await contract.blindTokenURI());
+      setBlindBoxOpened(await contract.blindBoxOpened());
+      setNewMaxMint((await contract.maxPerAddressMint()).toString());
+      setWhitelistPause(await contract.allowlistPaused());
+      setNewWhitelistPrice(ethers.utils.formatEther(await contract.allowlistNftPrice()));
+
+      // member
+      const DEFAULT_ADMIN_ROLE =
+        '0x0000000000000000000000000000000000000000000000000000000000000000';
+      const minterCount = (await contract.getRoleMemberCount(DEFAULT_ADMIN_ROLE)).toNumber();
+      const members = [];
+      for (let i = 0; i < minterCount; ++i) {
+        members.push(await contract.getRoleMember(DEFAULT_ADMIN_ROLE, i));
+      }
+      setMembers([...members, '']);
+
+      // sharing member
+      const sharingMember: sharingMember[] = [];
+      const sharingCount = (await contract.getSharingMemberCount()).toNumber();
+      for (let i = 0; i < sharingCount; i++) {
+        const sharing = await contract.getSharingMember(i);
+        sharingMember.push({
+          address: sharing[0],
+          share: sharing[1].toNumber(),
+        });
+      }
+      setSharingMembers(sharingMember);
+    }
+  };
 
   React.useEffect(() => {
+    getSetting();
+  }, [contract]);
+
+  const switchNetwork = async () => {
+    try {
+      /* @ts-ignore */
+      window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x' + import.meta.env.VITE_CHAINID.toString(16) }],
+      });
+    } catch (error: any) {
+      console.log({ error });
+    }
+  };
+
+  const web3Login = async () => {
     if (signer) {
-      signer.getAddress().then((address) => setAddress(address));
-      signer.getBalance().then((eth) => setBalance(ethers.utils.formatEther(eth)));
-    }
-  }, [signer]);
+      const web3Token = await Web3Token.sign(
+        async (msg: string | ethers.utils.Bytes) => await signer.signMessage(msg),
+        '1d',
+      );
 
-  const updateAccount = async (p = provider): Promise<ethers.Contract> => {
-    if (secretKey === 'user account') {
-      const signer = p!.getSigner();
-      setSigner(signer);
+      const { data } = await axios.get(import.meta.env.VITE_BACKEND_URL + '/api/user/login', {
+        headers: { authorization: 'Bearer ' + web3Token },
+      });
+      const token = data.token;
 
-      const c = new ethers.Contract(contractAddress, contractJson.abi, signer);
-      setContract(c);
-      return c;
-    } else {
-      const w = new ethers.Wallet(secretKey, p);
-      setSigner(w);
+      {
+        const { data } = await axios.get(import.meta.env.VITE_BACKEND_URL + '/api/user/me', {
+          headers: { authorization: 'Bearer ' + token },
+        });
 
-      const c = new ethers.Contract(contractAddress, contractJson.abi, w);
-      setContract(c);
-      return c;
+        console.log(data);
+      }
     }
   };
 
-  React.useEffect(() => {
-    updateAccount();
-  }, [secretKey]);
-
-  const copyAddress = () => {
-    navigator.clipboard.writeText(address);
-  };
+  ////////////// Profile畫面 ///////////////////
 
   const renderProfile = () => {
     if (!profile) {
@@ -263,7 +269,7 @@ function App() {
         const tx = await contract.setNftPrice(wai.toString(), { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -280,7 +286,7 @@ function App() {
         const tx = await contract.setAllowlistNftPrice(wai.toString(), { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -296,7 +302,7 @@ function App() {
         const tx = await contract!.setBaseURI(newBaseURI, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -312,7 +318,7 @@ function App() {
         const tx = await contract.setMaxPerAddressMint(newMaxMint, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -328,7 +334,7 @@ function App() {
         const tx = await contract.setBlindTokenURI(newBlindTokenURI, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -345,7 +351,7 @@ function App() {
         const tx = await contract.setBlindBoxOpened(e.target.checked, { nonce: await getNonce() });
         const res = await tx.wait();
         console.log(res);
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -366,8 +372,7 @@ function App() {
           const tx = await contract.unpause({ nonce: await getNonce() });
           const res = await tx.wait();
         }
-        console.log('BBB');
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -400,7 +405,7 @@ function App() {
         const tx = await contract.seedAllowlist(addrs, nums, { nonce: await getNonce() });
         const res = await tx.wait;
         console.log(res);
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -414,7 +419,7 @@ function App() {
         setSpin(true);
         const tx = await contract.withdraw({ nonce: await getNonce() });
         await tx.wait();
-        await getSetting(contract);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -437,7 +442,7 @@ function App() {
           const res = await tx.wait();
           console.log(res);
         }
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -452,7 +457,7 @@ function App() {
         setSpin(true);
         const tx = await contract.addMember(address, { nonce: await getNonce() });
         const res = tx.wait();
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -469,7 +474,7 @@ function App() {
         setSpin(true);
         const tx = await contract.removeMember(address, { nonce: await getNonce() });
         const res = tx.wait();
-        await getSetting(contract!);
+        await getSetting();
       } catch (error) {
         setTxError(error);
       }
@@ -844,9 +849,14 @@ function App() {
       {spin && <Spinner />}
       {errorMessage && <Text color="red">{errorMessage}</Text>}
       <div className="card">
-        <p>Chain: {chainName}</p>
+        <p>Chain: {chainId}</p>
         <p>
-          {chainName !== import.meta.env.VITE_CHAINNAME && (
+          {chainId !== +import.meta.env.VITE_CHAINID && (
+            <Button colorScheme="blue" onClick={switchNetwork}>
+              Switch Network
+            </Button>
+          )}
+          {/* {chainName !== import.meta.env.VITE_CHAINNAME && (
             <Text color="tomato">
               Please switch to{' '}
               <Link
@@ -857,17 +867,22 @@ function App() {
                 {import.meta.env.VITE_CHAINNAME}
               </Link>
             </Text>
-          )}
+          )} */}
         </p>
+        <Button colorScheme="blue" onClick={() => {}}>
+          Connect Wallet
+        </Button>
+        <Button colorScheme="blue" onClick={web3Login}>
+          Login
+        </Button>
       </div>
       <div>
         <Profile
           address={address}
           balance={balance}
-          contractAddress={contractAddress}
+          contractAddress={import.meta.env.VITE_CONTRACT_ADDRESS}
           contractBalance={contractBalance}
           setSecretKey={setSecretKey}
-          copyAddress={copyAddress}
         />
       </div>
       <Tabs className="mt-6">
@@ -886,9 +901,9 @@ function App() {
           <TabPanel>{renderAdmin()}</TabPanel>
           <TabPanel>{renderMint()}</TabPanel>
           <TabPanel>{renderInfo()}</TabPanel>
-          <TabPanel>
-            <Deploy provider={provider} setContractAddress={setContractAddress} signer={signer} />
-          </TabPanel>
+          {/* <TabPanel>
+            <Deploy provider={provider} setContractAddress={() => {}} signer={signer} />
+          </TabPanel> */}
         </TabPanels>
       </Tabs>
     </div>
